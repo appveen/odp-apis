@@ -1,5 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const { Observable, timer, interval } = require('rxjs');
+const { flatMap } = require('rxjs/operators');
 
 const httpClient = require('./lib/http-client.utils');
 const odpClient = require('./lib/odp-client.utils');
@@ -8,7 +10,8 @@ const TOKEN_PATH = path.join(process.cwd(), 'TOKEN');
 if (!fs.existsSync(TOKEN_PATH)) {
     fs.writeFileSync(TOKEN_PATH, '', 'utf8');
 }
-const apiMap = {};
+let loginData = {};
+let loginIntval;
 
 /**
  * 
@@ -48,85 +51,56 @@ const apiMap = {};
 */
 
 
-/**
- * 
- * @param {Options} options
- */
-function getToken(options) {
-    async function execute() {
-        const host = options.host;
-        const username = options.username;
-        const password = options.password;
-        let res;
-        const TOKEN = fs.readFileSync(TOKEN_PATH);
-        if (TOKEN) {
-            res = await httpClient.get(host + '/api/a/rbac/check', {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'JWT ' + TOKEN
-                }
-            });
-            if (res.statusCode === 200) {
-                fs.writeFileSync(TOKEN_PATH, res.body.token, 'utf8');
-                return res.body.token;
-            } else {
-                res = await httpClient.post(host + '/api/a/rbac/login', {
-                    body: { username, password }
-                });
-            }
-        } else {
-            res = await httpClient.post(host + '/api/a/rbac/login', {
-                body: { username, password }
-            });
-        }
-        if (res.statusCode === 200) {
-            fs.writeFileSync(TOKEN_PATH, res.body.token, 'utf8');
-            // const allService = await httpClient.get(host + '/api/a/sm/service', {
-            //     headers: {
-            //         'Content-Type': 'application/json',
-            //         'Authorization': 'JWT ' + res.body.token
-            //     },
-            //     qs: {
-            //         count: -1,
-            //         select: '_id,api,app'
-            //     }
-            // });
-            // if (allService.statusCode === 200 && Array.isArray(allService.body)) {
-            //     allService.body.forEach(item => {
-            //         apiMap[item._id] = '/api/c/' + item.app + item.api;
-            //     });
-            // }
-            return res.body.token;
-        } else {
-            return null;
-        }
+
+
+function createAutoRefreshRoutine(options, userDetails) {
+    const resolveIn = userDetails.expiresIn - new Date(userDetails.serverTime).getTime() - 300000;
+    let intervalValue = (userDetails.rbacUserTokenDuration - (5 * 60)) * 1000;
+    if (userDetails.bot) {
+        intervalValue = (userDetails.rbacBotTokenDuration - (5 * 60)) * 1000;
     }
-    return execute();
+    loginIntval = timer(resolveIn).pipe(
+        flatMap(e => doLogin(options))
+    ).subscribe((res1) => {
+        Object.assign(loginData, res1);
+        loginIntval = interval(intervalValue).pipe(
+            flatMap(e => doLogin(options))
+        ).subscribe((res2) => {
+            Object.assign(loginData, res2);
+        }, console.error);
+    }, console.error);
+}
+
+async function getToken() {
+    return fs.readFileSync(TOKEN_PATH);
 }
 
 /**
  * 
  * @param {Options} options
+ * @param {boolean} init If it is an initialize call
  */
-function login(options) {
-    return () => {
-        async function execute() {
-            const host = options.host;
-            const username = options.username;
-            const password = options.password;
-            const res = await httpClient.post(host + '/api/a/rbac/login', {
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: { username, password }
-            });
-            return {
-                statusCode: res.statusCode,
-                body: res.body
-            };
+function doLogin(options, init) {
+    return new Observable(observe => {
+        const host = options.host;
+        const username = options.username;
+        const password = options.password;
+        let res = await httpClient.post(host + '/api/a/rbac/login', {
+            body: { username, password }
+        });
+        if (res.statusCode === 200) {
+            fs.writeFileSync(TOKEN_PATH, res.body.token, 'utf8');
+            Object.assign(loginData, res.body);
+            observe.next(res.body);
+            if (init) {
+                createAutoRefreshRoutine(options, res.body);
+            }
+        } else {
+            Object.assign(loginData, {});
+            observe.next(null);
         }
-        return execute();
-    };
+        observe.complete();
+    });
 }
 
 
@@ -149,7 +123,7 @@ function app(options) {
                     if (select) {
                         query.select = select;
                     }
-                    const token = await getToken(options);
+                    const token = await getToken();
                     const res = await httpClient.get(host + '/api/a/rbac/app/' + app, {
                         qs: query,
                         headers: {
@@ -190,7 +164,7 @@ function dataService(options) {
                     }
                     query.count = 2;
                     query.filter = JSON.stringify({ $and: [{ app: options.app }, { $or: [{ _id: serviceId }, { name: serviceId }] }] });
-                    const token = await getToken(options);
+                    const token = await getToken();
                     const res = await httpClient.get(host + '/api/a/sm/service', {
                         qs: query,
                         headers: {
@@ -211,7 +185,7 @@ function dataService(options) {
                     if (select) {
                         query.select = select;
                     }
-                    const token = await getToken(options);
+                    const token = await getToken();
                     const res = await httpClient.post(host + '/api/a/sm/service/' + serviceId, {
                         qs: query,
                         headers: {
@@ -238,7 +212,6 @@ function dataService(options) {
  */
 function documents(options) {
     const temp = JSON.parse(JSON.stringify(options));
-    // temp.api = apiMap[options.serviceId];
     return () => {
         return {
             count: odpClient.count(temp),
@@ -256,8 +229,10 @@ function documents(options) {
  * @param {Options} options
  */
 function init(options) {
+    doLogin(options, true).subscribe(res => { console.log('**** Login Done ****') });
     return {
-        login: login(options),
+        getToken: getToken,
+        loginData: loginData,
         app: app(options)
     };
 }
