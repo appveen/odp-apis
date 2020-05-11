@@ -59,10 +59,13 @@ function createAutoRefreshRoutine(options, userDetails) {
     if (userDetails.bot) {
         intervalValue = (userDetails.rbacBotTokenDuration - (5 * 60)) * 1000;
     }
-    loginIntval = timer(resolveIn).pipe(
+    timer(resolveIn).pipe(
         flatMap(e => doLogin(options))
     ).subscribe((res1) => {
         Object.assign(loginData, res1);
+        if (loginIntval) {
+            loginIntval.unsubscribe();
+        }
         loginIntval = interval(intervalValue).pipe(
             flatMap(e => doLogin(options))
         ).subscribe((res2) => {
