@@ -1,24 +1,11 @@
-const fs = require('fs');
-const path = require('path');
-const { Observable, timer, interval } = require('rxjs');
-const { flatMap } = require('rxjs/operators');
-
 const httpClient = require('./lib/http-client.utils');
 const odpClient = require('./lib/odp-client.utils');
-
-const TOKEN_PATH = path.join(process.cwd(), 'TOKEN');
-if (!fs.existsSync(TOKEN_PATH)) {
-    fs.writeFileSync(TOKEN_PATH, '', 'utf8');
-}
-let loginData = {};
-let loginIntval;
 
 /**
  * 
  * @typedef {Object} Options
  * @property {string} host - The hostname/FQDN of the application to connect
- * @property {string} username - Username of Bot
- * @property {string} password - Password of Bot
+ * @property {*} loginData - The login data from Login()
  */
 
 
@@ -50,106 +37,45 @@ let loginIntval;
 * @property {string} serviceId - The Data Service ID/Name
 */
 
-
-
-
-function createAutoRefreshRoutine(options, userDetails) {
-    const resolveIn = userDetails.expiresIn - new Date(userDetails.serverTime).getTime() - 300000;
-    let intervalValue = (userDetails.rbacUserTokenDuration - (5 * 60)) * 1000;
-    if (userDetails.bot) {
-        intervalValue = (userDetails.rbacBotTokenDuration - (5 * 60)) * 1000;
+/**
+ * 
+ * @param {Options} options 
+ */
+function api(options) {
+    function getToken() {
+        return options.loginData.token;
     }
-    timer(resolveIn).pipe(
-        flatMap(e => doLogin(options))
-    ).subscribe((res1) => {
-        Object.assign(loginData, res1);
-        if (loginIntval) {
-            loginIntval.unsubscribe();
-        }
-        loginIntval = interval(intervalValue).pipe(
-            flatMap(e => doLogin(options))
-        ).subscribe((res2) => {
-            Object.assign(loginData, res2);
-        }, console.error);
-    }, console.error);
-}
-
-async function getToken() {
-    return fs.readFileSync(TOKEN_PATH);
-}
-
-/**
- * 
- * @param {Options} options
- * @param {boolean} init If it is an initialize call
- */
-function doLogin(options, init) {
-    return new Observable(observe => {
-        const host = options.host;
-        const username = options.username;
-        const password = options.password;
-        let res = await httpClient.post(host + '/api/a/rbac/login', {
-            body: { username, password }
-        });
-        if (res.statusCode === 200) {
-            fs.writeFileSync(TOKEN_PATH, res.body.token, 'utf8');
-            Object.assign(loginData, res.body);
-            observe.next(res.body);
-            if (init) {
-                createAutoRefreshRoutine(options, res.body);
-            }
-        } else {
-            Object.assign(loginData, {});
-            observe.next(null);
-        }
-        observe.complete();
-    });
-}
-
-
-/**
- * 
- * @param {Options} AppOptions
- */
-function app(options) {
-    /**
-     * @param {string} app The App Name
-     */
-    return (app) => {
-        const host = options.host;
-        const temp = JSON.parse(JSON.stringify(options));
-        temp.app = app;
-        return {
-            get: (select) => {
-                async function execute() {
+    return {
+        app: (app) => {
+            const host = options.host;
+            const temp = JSON.parse(JSON.stringify(options));
+            temp.app = app;
+            return {
+                get: async (select) => {
                     const query = {};
                     if (select) {
                         query.select = select;
                     }
-                    const token = await getToken();
                     const res = await httpClient.get(host + '/api/a/rbac/app/' + app, {
                         qs: query,
                         headers: {
                             'Content-Type': 'application/json',
-                            'Authorization': 'JWT ' + token
+                            'Authorization': 'JWT ' + getToken()
                         },
                     });
                     return {
                         statusCode: res.statusCode,
                         body: res.body
                     };
-                }
-                return execute();
-            },
-            dataService: dataService(temp)
+                },
+                dataService: dataService(temp)
+            }
         }
     };
+
 }
 
-/**
- * 
- * @param {Options} options
- */
+
 function dataService(options) {
     /**
      * @param {string} serviceId The Data Service Id/Name
@@ -165,14 +91,13 @@ function dataService(options) {
                     if (select) {
                         query.select = select;
                     }
-                    query.count = 2;
+                    query.count = 1;
                     query.filter = JSON.stringify({ $and: [{ app: options.app }, { $or: [{ _id: serviceId }, { name: serviceId }] }] });
-                    const token = await getToken();
                     const res = await httpClient.get(host + '/api/a/sm/service', {
                         qs: query,
                         headers: {
                             'Content-Type': 'application/json',
-                            'Authorization': 'JWT ' + token
+                            'Authorization': 'JWT ' + getToken()
                         },
                     });
                     return {
@@ -188,12 +113,11 @@ function dataService(options) {
                     if (select) {
                         query.select = select;
                     }
-                    const token = await getToken();
                     const res = await httpClient.post(host + '/api/a/sm/service/' + serviceId, {
                         qs: query,
                         headers: {
                             'Content-Type': 'application/json',
-                            'Authorization': 'JWT ' + token
+                            'Authorization': 'JWT ' + getToken()
                         },
                     });
                     return {
@@ -227,17 +151,4 @@ function documents(options) {
     }
 }
 
-/**
- * 
- * @param {Options} options
- */
-function init(options) {
-    doLogin(options, true).subscribe(res => { console.log('**** Login Done ****') });
-    return {
-        getToken: getToken,
-        loginData: loginData,
-        app: app(options)
-    };
-}
-
-module.exports = init;
+module.exports = api;
