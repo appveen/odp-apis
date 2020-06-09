@@ -5,13 +5,14 @@ A Library to integrate ODP into any application.
 ## Examples
 
 ```javascript
-const { Login } = require('odp-apis');
+const ODP = require('odp-apis');
 
-Login({
+const API = new ODP({
     host: HOST,
     username: USERNAME,
     password: PASSWORD
-}).then(userData=>{
+});
+API.login().then(userData=>{
     console.log(userData.token);
 }).catch(console.error);
 

@@ -1,7 +1,16 @@
-const { Observable, timer, interval } = require('rxjs');
-const { flatMap } = require('rxjs/operators');
+const { interval } = require('rxjs');
+const log4js = require('log4js');
+const _ = require('lodash');
 
 const httpClient = require('./lib/http-client.utils');
+
+let logger;
+if (global.logger) {
+    logger = global.logger;
+} else {
+    logger = log4js.getLogger('odp-apis');
+    logger.level = process.env.LOG_LEVEL || 'debug';
+}
 
 /**
  * 
@@ -13,120 +22,111 @@ const httpClient = require('./lib/http-client.utils');
 
 
 
-/**
-* 
-* @typedef {Object} UserData
-* @property {string} token
-* @property {string} _id
-* @property {string} username
-* @property {string} basicDetails.name
-* @property {string} basicDetails.phone
-* @property {string} basicDetails.email
-* @property {boolean} isSuperAdmin
-* @property {boolean} bot
-* @property {number} sessionTime
-* @property {number} serverTime
-* @property {number} expiresIn
-* @property {string} lastLogin
-*/
-
 
 /**
  * 
  * @param {Options} options 
- * @returns {Promise<UserData>}
  */
-async function login(options) {
+function ODPApis(options) {
+    if (!options) {
+        throw new Error('Options is mandatory');
+    }
+    if (!options.host) {
+        throw new Error('Host is mandatory');
+    }
+    if (!options.username) {
+        throw new Error('Username is mandatory');
+    }
+    if (!options.password) {
+        throw new Error('Password is mandatory');
+    }
     if (!options.host.endsWith('/')) {
         options.host += '/';
     }
-    const loginUrl = options.host + 'api/a/rbac/login';
-    const refreshUrl = options.host + 'api/a/rbac/refresh';
-    const heartBeatUrl = options.host + 'api/a/rbac/usr/hb';
-    const loginData = {};
-    const username = options.username;
-    const password = options.password;
-    let res = await httpClient.post(loginUrl, {
-        body: { username, password }
-    });
-    if (res.statusCode === 200) {
-        Object.assign(loginData, res.body);
-        if (loginData.rbacUserToSingleSession || loginData.rbacUserCloseWindowToLogout) {
-            createHeartBeatRoutine();
-        }
-        if (loginData.rbacUserTokenRefresh) {
-            createAutoRefreshRoutine();
-        }
-        return loginData;
-    } else {
-        throw res.body;
-    }
-
-    function createAutoRefreshRoutine() {
-        const resolveIn = loginData.expiresIn - new Date(loginData.serverTime).getTime() - 300000;
-        let intervalValue = (loginData.rbacUserTokenDuration - (5 * 60)) * 1000;
-        if (loginData.bot) {
-            intervalValue = (loginData.rbacBotTokenDuration - (5 * 60)) * 1000;
-        }
-        timer(resolveIn).pipe(
-            flatMap(e => doRefresh())
-        ).subscribe((res1) => {
-            Object.assign(loginData, res1);
-            interval(intervalValue).pipe(
-                flatMap(e => doRefresh())
-            ).subscribe((res2) => {
-                Object.assign(loginData, res2);
-            }, console.error);
-        }, console.error);
-    }
-    function createHeartBeatRoutine() {
-        const resolveIn = (loginData.rbacHbInterval * 1000) - 1000;
-        doHeartbeat().subscribe(data => {
-            interval(resolveIn).pipe(
-                flatMap(e => doHeartbeat())
-            ).subscribe((res2) => { }, console.error);
-        }, console.error);
-
-    }
-    function doRefresh() {
-        return new Observable(async (observe) => {
-            let res = await httpClient.get(refreshUrl, {
-                headers: {
-                    rToken: loginData.rToken,
-                    Authorization: loginData.token
-                }
-            });
-            if (res.statusCode === 200) {
-                Object.assign(loginData, res.body);
-                observe.next(res.body);
-            } else {
-                observe.error(res.body);
-            }
-            observe.complete();
-        });
-    }
-    function doHeartbeat() {
-        return new Observable(async (observe) => {
-            let res = await httpClient.put(heartBeatUrl, {
-                headers: {
-                    Authorization: loginData.token
-                },
-                body: {
-                    uuid: loginData.uuid
-                }
-            });
-            if (res.statusCode === 200) {
-                Object.assign(loginData, res.body);
-                observe.next(res.body);
-            } else {
-                observe.error(res.body);
-            }
-            observe.complete();
-        });
-    }
+    this.host = options.host;
+    this.username = options.username;
+    this.password = options.password;
+    this.loginData = {};
 }
 
 
+ODPApis.prototype.login = async function () {
+    const username = this.username;
+    const password = this.password;
+    let refreshRoutine;
+    let hbRoutine;
+    try {
+        let res = await httpClient.post(this.host + 'api/a/rbac/login', {
+            body: { username, password }
+        });
+        if (res.statusCode === 200) {
+            _.merge(this.loginData, res.body);
+            if (this.loginData.rbacUserToSingleSession || this.loginData.rbacUserCloseWindowToLogout) {
+                logger.debug('Creating HB Routine');
+                const intervalValue = (this.loginData.rbacHbInterval * 1000) - 1000;
+                hbRoutine = interval(intervalValue).subscribe(async () => {
+                    logger.debug('[HB Triggred]', this.loginData.token, this.loginData.rToken);
+                    try {
+                        let res = await httpClient.put(this.host + 'api/a/rbac/usr/hb', {
+                            headers: {
+                                Authorization: 'JWT ' + this.loginData.token
+                            },
+                            body: {
+                                uuid: this.loginData.uuid
+                            }
+                        });
+                        if (res.statusCode === 200) {
+                            _.merge(this.loginData, res.body);
+                        } else if (res.statusCode === 401) {
+                            this.login();
+                            if (hbRoutine) {
+                                hbRoutine.unsubscribe();
+                            }
+                        } else {
+                            logger.error(res.body);
+                        }
+                    } catch (e) {
+                        logger.error(e);
+                    }
+                });
+            }
+            if (this.loginData.rbacUserTokenRefresh) {
+                logger.debug('Creating Refresh Routine');
+                let intervalValue = (this.loginData.rbacUserTokenDuration - (5 * 60)) * 1000;
+                if (this.loginData.bot) {
+                    intervalValue = (this.loginData.rbacBotTokenDuration - (5 * 60)) * 1000;
+                }
+                refreshRoutine = interval(intervalValue).subscribe(async () => {
+                    logger.debug('[Refresh Triggred]', this.loginData.token, this.loginData.uuid);
+                    try {
+                        let res = await httpClient.get(this.host + 'api/a/rbac/refresh', {
+                            headers: {
+                                rToken: 'JWT ' + this.loginData.rToken,
+                                Authorization: 'JWT ' + this.loginData.token
+                            }
+                        });
+                        if (res.statusCode === 200) {
+                            _.merge(this.loginData, res.body);
+                        } else if (res.statusCode === 401) {
+                            this.login();
+                            if (refreshRoutine) {
+                                refreshRoutine.unsubscribe();
+                            }
+                        } else {
+                            logger.error(res.body);
+                        }
+                    } catch (e) {
+                        logger.error(e);
+                    }
+                });
+            }
+            return res.body;
+        } else {
+            throw res.body;
+        }
+    } catch (e) {
+        throw e;
+    }
+};
 
-
-module.exports = login;
+module.exports = ODPApis;
