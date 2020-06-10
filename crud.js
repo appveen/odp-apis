@@ -27,13 +27,6 @@ function CRUD(api) {
     this.api = api;
 }
 
-// CRUD.prototype.count = _count;
-// CRUD.prototype.get = _get;
-// CRUD.prototype.list = _list;
-// CRUD.prototype.post = _post;
-// CRUD.prototype.put = _put;
-// CRUD.prototype.delete = _delete;
-
 
 /**
  * 
