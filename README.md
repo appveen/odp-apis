@@ -12,14 +12,14 @@ const API = new ODP({
     username: USERNAME,
     password: PASSWORD
 });
-API.login().then(userData=>{
-    console.log(userData.token);
+API.login().then(())=>{
+    console.log(API.loginData);
 }).catch(console.error);
 
 ```
 
 ### Features
 
-- userData will contain the login data.
-- Heartbeats and Token Refresh is internally handled for you.
-- userData.token will always give you the latest valid token. 
+- API.loginData will contain the login data.
+- Heartbeats and Token Refresh is internally handled.
+- API.loginData.token will always give you the latest valid token. 

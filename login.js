@@ -9,7 +9,7 @@ if (global.logger) {
     logger = global.logger;
 } else {
     logger = log4js.getLogger('odp-apis');
-    logger.level = process.env.LOG_LEVEL || 'debug';
+    logger.level = process.env.LOG_LEVEL || 'info';
 }
 
 /**
@@ -65,7 +65,7 @@ ODPApis.prototype.login = async function () {
                 logger.debug('Creating HB Routine');
                 const intervalValue = (this.loginData.rbacHbInterval * 1000) - 1000;
                 hbRoutine = interval(intervalValue).subscribe(async () => {
-                    logger.debug('[HB Triggred]', this.loginData.token, this.loginData.rToken);
+                    logger.debug('[HB Triggred]', this.loginData.token, this.loginData.uuid);
                     try {
                         let res = await httpClient.put(this.host + 'api/a/rbac/usr/hb', {
                             headers: {
@@ -97,7 +97,7 @@ ODPApis.prototype.login = async function () {
                     intervalValue = (this.loginData.rbacBotTokenDuration - (5 * 60)) * 1000;
                 }
                 refreshRoutine = interval(intervalValue).subscribe(async () => {
-                    logger.debug('[Refresh Triggred]', this.loginData.token, this.loginData.uuid);
+                    logger.debug('[Refresh Triggred]', this.loginData.token, this.loginData.rToken);
                     try {
                         let res = await httpClient.get(this.host + 'api/a/rbac/refresh', {
                             headers: {
