@@ -2,7 +2,8 @@ const { interval } = require('rxjs');
 const log4js = require('log4js');
 const _ = require('lodash');
 
-const httpClient = require('./lib/http-client.utils');
+const CRUD = require('./crud');
+const httpClient = require('./lib/http.utils');
 
 let logger;
 if (global.logger) {
@@ -127,6 +128,16 @@ ODPApis.prototype.login = async function () {
     } catch (e) {
         throw e;
     }
+};
+
+/**
+ * @param {string} api The API Endpoint
+ */
+ODPApis.prototype.crud = function (api) {
+    const temp = new CRUD(api);
+    temp.loginData = this.loginData;
+    temp.host = this.host;
+    return temp;
 };
 
 module.exports = ODPApis;
